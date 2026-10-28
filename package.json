@@ -1,0 +1,21 @@
+{
+  "name": "markdown-brain",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "packageManager": "pnpm@12.14.0",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "dev:http": "tsx src/http-main.ts",
+    "auth:hash": "tsx src/token-hash.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/src/main.js",
+    "start:http": "node dist/src/http-main.js",
+    "test": "pnpm build && node --test dist/test/*.test.js",
+    "test:docker": "pnpm build && DOCKER_SMOKE=1 node --test dist/test/docker.test.js"
+  },
+  "devDependencies": { "typescript": "7.0.2", "@types/node": "22.20.5", "tsx": "4.23.15" },
+  "dependencies": { "@tobilu/qmd": "2.8.3", "@modelcontextprotocol/sdk": "1.32.2", "zod": "4.6.7" }
+}

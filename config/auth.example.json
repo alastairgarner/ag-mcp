@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "tokens": [
+    { "name": "my-agent", "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_SHA256_HASH" }
+  ]
+}

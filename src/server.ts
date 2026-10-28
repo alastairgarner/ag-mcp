@@ -1,0 +1,70 @@
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
+import type { Brain } from './brain.js';
+import { errorMessage } from './errors.js';
+import { MAX_SEARCH_RESPONSE_BYTES } from './limits.js';
+
+async function respond<T extends Record<string, unknown>>(action: () => T | Promise<T>, maxResponseBytes?: number): Promise<CallToolResult> {
+  try {
+    const result = await action();
+    const response: CallToolResult = { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+    if (maxResponseBytes !== undefined && Buffer.byteLength(JSON.stringify(response)) > maxResponseBytes) throw new Error('Search response exceeds byte budget');
+    return response;
+  } catch (error) {
+    return { isError: true, content: [{ type: 'text', text: errorMessage(error) }] };
+  }
+}
+
+export function createServer(brain: Brain): McpServer {
+  const server = new McpServer({ name: 'markdown-brain', version: '0.2.0' });
+  const name = z.string().min(1).max(1024);
+  const text = z.string().max(1024 * 1024);
+
+  server.registerTool('brain_status', {
+    description: 'Allowed root and explicit index freshness. Snapshot never guarantees absence of external changes.',
+    inputSchema: {},
+  }, () => respond(() => brain.status()));
+
+  server.registerTool('note_list', {
+    description: 'List non-hidden Markdown notes; no symlinks followed.',
+    inputSchema: {},
+  }, () => respond(() => brain.list()));
+
+  server.registerTool('note_read', {
+    description: 'Read authoritative disk lines, with SHA-256 of the entire UTF-8 file for editing.',
+    inputSchema: {
+      path: name,
+      fromLine: z.number().int().min(1).default(1),
+      maxLines: z.number().int().min(1).max(1000).default(200),
+    },
+  }, a => respond(() => brain.read(a.path, a.fromLine, a.maxLines)));
+
+  server.registerTool('note_create', {
+    description: 'Atomically create a Markdown note; parent directory must exist; never overwrite.',
+    inputSchema: { path: name, content: text },
+  }, a => respond(() => brain.create(a.path, a.content)));
+
+  server.registerTool('note_edit', {
+    description: 'Exact unique, non-overlapping replacements against original content, guarded by full-file SHA-256. No blind overwrite.',
+    inputSchema: {
+      path: name,
+      expectedHash: z.string().regex(/^[a-f0-9]{64}$/),
+      edits: z.array(z.object({ oldText: text.min(1), newText: text })).min(1).max(100),
+    },
+  }, a => respond(() => brain.edit(a.path, a.expectedHash, a.edits)));
+
+  server.registerTool('brain_refresh', {
+    description: 'Rebuild disposable QMD keyword index from a contained snapshot; returns stale on failure.',
+    inputSchema: {},
+  }, () => respond(() => brain.refresh()));
+
+  server.registerTool('note_search', {
+    description: 'QMD BM25 search; refreshes first. Results are indexed snapshots, not authoritative file reads. Check freshness.',
+    inputSchema: {
+      query: z.string().min(1).max(2000),
+      limit: z.number().int().min(1).max(50).default(10),
+    },
+  }, a => respond(() => brain.search(a.query, a.limit), MAX_SEARCH_RESPONSE_BYTES));
+  return server;
+}
