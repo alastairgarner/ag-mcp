@@ -20,7 +20,7 @@ import { TokenAuth, hashToken } from '../src/auth.js';
 
 async function fixture(t: TestContext, limits: Partial<ResourceLimits> = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'brain-http-'));
-  await fs.mkdir(path.join(base, 'notes'));
+  await fs.mkdir(path.join(base, 'notes', 'ai'), { recursive: true });
   const brain = await Brain.open(path.join(base, 'notes'), path.join(base, 'state'), limits);
   const token = randomBytes(32).toString('hex');
   const secondToken = randomBytes(32).toString('hex');
@@ -54,16 +54,16 @@ const searchSchema = z.object({ results: z.array(z.object({ reference: z.string(
 const textResult = z.array(z.object({ type: z.literal('text'), text: z.string() })).min(1);
 
 test('stateless HTTP shares safe QMD-backed storage across independent clients', async t => {
-  const { connect, secondToken } = await fixture(t);
+  const { connect, secondToken, root } = await fixture(t);
   const [a, b] = await Promise.all([connect(), connect(secondToken)]);
   assert.equal((await a.listTools()).tools.length, 7);
-  const created = await a.callTool({ name: 'note_create', arguments: { path: 'http.md', content: '# HTTP\nNeptune exploration' } });
+  const created = await a.callTool({ name: 'note_create', arguments: { path: 'ai/http.md', content: '# HTTP\nNeptune exploration' } });
   assert.ok(!created.isError);
   const { hash } = mutationSchema.parse(created.structuredContent);
-  const reads = await Promise.all([a, b].map(client => client.callTool({ name: 'note_read', arguments: { path: 'http.md' } })));
+  const reads = await Promise.all([a, b].map(client => client.callTool({ name: 'note_read', arguments: { path: 'ai/http.md' } })));
   for (const result of reads) assert.equal(readSchema.parse(result.structuredContent).hash, hash);
   const conflicts = await Promise.all([a, b].map((client, index) => client.callTool({
-    name: 'note_edit', arguments: { path: 'http.md', expectedHash: hash, edits: [{ oldText: 'Neptune', newText: `Saturn${index}` }] },
+    name: 'note_edit', arguments: { path: 'ai/http.md', expectedHash: hash, edits: [{ oldText: 'Neptune', newText: `Saturn${index}` }] },
   })));
   assert.equal(conflicts.filter(r => !r.isError).length, 1);
   const failed = conflicts.find(r => r.isError);
@@ -71,10 +71,23 @@ test('stateless HTTP shares safe QMD-backed storage across independent clients',
   assert.match(JSON.stringify(textResult.parse(failed.content)), /hash conflict/);
   const search = await b.callTool({ name: 'note_search', arguments: { query: 'exploration' } });
   assert.equal(searchSchema.parse(search.structuredContent).results.length, 1);
-  const duplicate = await b.callTool({ name: 'note_create', arguments: { path: 'http.md', content: 'clobber' } });
+  const duplicate = await b.callTool({ name: 'note_create', arguments: { path: 'ai/http.md', content: 'clobber' } });
   assert.equal(duplicate.isError, true);
   const escape = await b.callTool({ name: 'note_read', arguments: { path: '../secret.md' } });
   assert.equal(escape.isError, true);
+  for (const client of [a, b]) {
+    const rejected = await client.callTool({ name: 'note_create', arguments: { path: 'outside.md', content: 'forbidden' } });
+    assert.equal(rejected.isError, true);
+  }
+  await assert.rejects(fs.stat(path.join(root, 'outside.md')), /ENOENT/);
+  await fs.writeFile(path.join(root, 'existing.md'), 'outside ai');
+  const existing = await b.callTool({ name: 'note_read', arguments: { path: 'existing.md' } });
+  const edited = await a.callTool({ name: 'note_edit', arguments: {
+    path: 'existing.md', expectedHash: readSchema.parse(existing.structuredContent).hash,
+    edits: [{ oldText: 'outside ai', newText: 'still editable' }],
+  } });
+  assert.ok(!edited.isError);
+  assert.equal(await fs.readFile(path.join(root, 'existing.md'), 'utf8'), 'still editable');
 });
 
 test('authenticated HTTP still enforces Host/Origin, request size, routes and methods', async t => {
@@ -103,7 +116,7 @@ test('authenticated HTTP still enforces Host/Origin, request size, routes and me
 test('HTTP rejects missing, wrong, malformed and duplicate credentials before MCP can write', async t => {
   const { endpoint, token, brain } = await fixture(t);
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
-    name: 'note_create', arguments: { path: 'forbidden.md', content: 'must not be written' },
+    name: 'note_create', arguments: { path: 'ai/forbidden.md', content: 'must not be written' },
   } });
   for (const credential of ['', `Bearer ${randomBytes(32).toString('hex')}`, `Basic ${token}`, 'Bearer short', `Bearer ${token}, Bearer ${token}`]) {
     const response = await fetch(endpoint + '/mcp', {
@@ -216,7 +229,7 @@ test('HTTP admission rejects overflow without queuing, preserves health, and rel
   aborted.destroy();
   await waitForIdle(http);
   const client = await connect();
-  const created = await client.callTool({ name: 'note_create', arguments: { path: 'after-overload.md', content: 'recovered' } });
+  const created = await client.callTool({ name: 'note_create', arguments: { path: 'ai/after-overload.md', content: 'recovered' } });
   assert.ok(!created.isError);
-  assert.equal((await brain.read('after-overload.md')).content, 'recovered');
+  assert.equal((await brain.read('ai/after-overload.md')).content, 'recovered');
 });

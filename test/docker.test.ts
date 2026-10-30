@@ -95,6 +95,7 @@ test('Docker HTTP MCP: authenticated safe writes, token revocation, restart pers
     return schema.parse(result.structuredContent);
   };
   await ready();
+  docker('exec', id, 'mkdir', '/data/notes/ai');
   assert.equal(docker('exec', id, 'id', '-u'), '1000');
   assert.equal(docker('inspect', '--format', '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}} {{.HostConfig.NanoCpus}}', id), '805306368 805306368 128 1000000000');
   const anonymous = await fetch(endpoint(), { method: 'POST', body: '{' });
@@ -102,7 +103,7 @@ test('Docker HTTP MCP: authenticated safe writes, token revocation, restart pers
   assert.equal(anonymous.headers.get('www-authenticate'), 'Bearer realm="markdown-brain"');
   const [a, b] = await Promise.all([connect(), connect(secondToken)]);
   assert.equal((await a.listTools()).tools.length, 7);
-  const createdNote = await call(a, 'note_create', { path: 'docker.md', content: '# Docker\nOrion observatory\n' }, mutation);
+  const createdNote = await call(a, 'note_create', { path: 'ai/docker.md', content: '# Docker\nOrion observatory\n' }, mutation);
   assert.equal(createdNote.freshness.state, 'snapshot');
   const found = await call(b, 'note_search', { query: 'Orion' }, search);
   assert.equal(found.results.length, 1);
@@ -110,30 +111,30 @@ test('Docker HTTP MCP: authenticated safe writes, token revocation, restart pers
   assert.ok(hit);
   assert.match(hit.excerpt, /Orion/);
   assert.ok(hit.reference.endsWith('/docker.md'));
-  const read = await call(b, 'note_read', { path: 'docker.md' }, note);
+  const read = await call(b, 'note_read', { path: 'ai/docker.md' }, note);
   assert.equal(read.hash, createdNote.hash);
   const edited = await call(a, 'note_edit', {
-    path: 'docker.md', expectedHash: read.hash, edits: [{ oldText: 'Orion', newText: 'Kepler' }],
+    path: 'ai/docker.md', expectedHash: read.hash, edits: [{ oldText: 'Orion', newText: 'Kepler' }],
   }, mutation);
   assert.equal((await call(b, 'note_search', { query: 'Orion' }, search)).results.length, 0);
   assert.equal((await call(b, 'note_search', { query: 'Kepler' }, search)).results.length, 1);
   const races = await Promise.all([a, b].map((client, index) => client.callTool({ name: 'note_edit', arguments: {
-    path: 'docker.md', expectedHash: edited.hash, edits: [{ oldText: 'Kepler', newText: `Star${index}` }],
+    path: 'ai/docker.md', expectedHash: edited.hash, edits: [{ oldText: 'Kepler', newText: `Star${index}` }],
   } })));
   assert.equal(races.filter(result => !result.isError).length, 1);
-  const persisted = await call(a, 'note_read', { path: 'docker.md' }, note);
+  const persisted = await call(a, 'note_read', { path: 'ai/docker.md' }, note);
   assert.match(persisted.content, /Star[01]/);
-  assert.equal(docker('exec', id, 'node', '-e', "process.stdout.write(require('node:fs').readFileSync('/data/notes/docker.md','utf8'))"), persisted.content.trim());
+  assert.equal(docker('exec', id, 'node', '-e', "process.stdout.write(require('node:fs').readFileSync('/data/notes/ai/docker.md','utf8'))"), persisted.content.trim());
   for (const args of [
-    { name: 'note_create', arguments: { path: 'docker.md', content: 'clobber' } },
+    { name: 'note_create', arguments: { path: 'ai/docker.md', content: 'clobber' } },
     { name: 'note_read', arguments: { path: '../outside.md' } },
-    { name: 'note_edit', arguments: { path: 'docker.md', expectedHash: read.hash, edits: [{ oldText: 'Docker', newText: 'clobber' }] } },
-    { name: 'note_edit', arguments: { path: 'docker.md', expectedHash: persisted.hash, edits: [{ oldText: 'o', newText: 'clobber' }] } },
+    { name: 'note_edit', arguments: { path: 'ai/docker.md', expectedHash: read.hash, edits: [{ oldText: 'Docker', newText: 'clobber' }] } },
+    { name: 'note_edit', arguments: { path: 'ai/docker.md', expectedHash: persisted.hash, edits: [{ oldText: 'o', newText: 'clobber' }] } },
   ]) assert.equal((await b.callTool(args)).isError, true);
   docker('exec', id, 'node', '-e', "const f=require('node:fs');f.writeFileSync('/tmp/outside.md','SecretNebula');f.symlinkSync('/tmp/outside.md','/data/notes/escape.md')");
   assert.equal((await b.callTool({ name: 'note_read', arguments: { path: 'escape.md' } })).isError, true);
   assert.equal((await call(a, 'note_search', { query: 'SecretNebula' }, search)).results.length, 0);
-  assert.equal((await call(b, 'note_read', { path: 'docker.md' }, note)).hash, persisted.hash);
+  assert.equal((await call(b, 'note_read', { path: 'ai/docker.md' }, note)).hash, persisted.hash);
   docker('exec', id, 'node', '-e', "const f=require('node:fs');const c='# '+'word '.repeat(200000)+'\\nneedle\\n';for(let i=0;i<4;i++)f.writeFileSync('/data/notes/large-'+i+'.md',c)");
   const compact = await a.callTool({ name: 'note_search', arguments: { query: 'needle', limit: 50 } });
   assert.ok(!compact.isError);
@@ -141,8 +142,8 @@ test('Docker HTTP MCP: authenticated safe writes, token revocation, restart pers
   const largeTitles = z.object({ results: z.array(z.object({ title: z.string(), titleTruncated: z.literal(true) })) }).parse(compact.structuredContent);
   assert.equal(largeTitles.results.length, 4);
   for (const hit of largeTitles.results) assert.ok(hit.title.length <= MAX_SEARCH_TITLE_LENGTH);
-  assert.equal((await b.callTool({ name: 'note_create', arguments: { path: 'over-budget.md', content: 'rejected before publication' } })).isError, true);
-  assert.equal(docker('exec', id, 'node', '-e', "process.stdout.write(String(require('node:fs').existsSync('/data/notes/over-budget.md')))"), 'false');
+  assert.equal((await b.callTool({ name: 'note_create', arguments: { path: 'ai/over-budget.md', content: 'rejected before publication' } })).isError, true);
+  assert.equal(docker('exec', id, 'node', '-e', "process.stdout.write(String(require('node:fs').existsSync('/data/notes/ai/over-budget.md')))"), 'false');
   assert.equal((await fetch(endpoint(), { headers: { origin: 'https://evil.example' } })).status, 403);
   await Promise.all([a.close(), b.close()]);
   docker('stop', '--time', '30', id);
@@ -157,7 +158,7 @@ test('Docker HTTP MCP: authenticated safe writes, token revocation, restart pers
   const revoked = await fetch(endpoint(), { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{' });
   assert.equal(revoked.status, 401);
   const restarted = await connect(secondToken);
-  assert.equal((await call(restarted, 'note_read', { path: 'docker.md' }, note)).hash, persisted.hash);
+  assert.equal((await call(restarted, 'note_read', { path: 'ai/docker.md' }, note)).hash, persisted.hash);
   const rebuilt = await call(restarted, 'note_search', { query: 'observatory' }, search);
   assert.equal(rebuilt.freshness.state, 'snapshot');
   assert.equal(rebuilt.results.length, 1);

@@ -1,6 +1,10 @@
-# Markdown Brain
+# Vault
 
-A shared Markdown second brain for AI agents, exposed through one MCP server.
+Your Obsidian Markdown vault for AI agents, exposed through one MCP server.
+
+Repository: [alastairgarner/vault](https://github.com/alastairgarner/vault).
+The MCP server identifies itself as `vault`; client-side connection labels can also
+use Vault. Existing tool names and deployment identifiers are unchanged.
 
 ## Intent
 
@@ -20,7 +24,7 @@ Target deployment: Docker on a Raspberry Pi; assess ARM64 support and model reso
 - Refresh the derived search index after writes and expose pending/stale indexing explicitly.
 - Offer stdio for local development and Streamable HTTP for shared access.
 
-V2 requires a named bearer token for every HTTP MCP request. Administrators manually configure token hashes in a private JSON file; all registered clients currently have full allowed-root read/write access. Keep access on the trusted LAN/tailnet and use HTTPS through Traefik. See [authentication setup](docs/authentication.md).
+V2 requires a named bearer token for every HTTP MCP request. Administrators manually configure token hashes in a private JSON file; all registered clients can read/search and edit existing notes throughout the allowed root, but can create new notes only inside lowercase root-relative `ai/`. Keep access on the trusted LAN/tailnet and use HTTPS through Traefik. See [authentication setup](docs/authentication.md).
 
 ## Not settled
 
@@ -40,7 +44,7 @@ pnpm typecheck
 pnpm test
 
 # Local fixtures only; never point these commands at your real vault.
-mkdir -p .local/notes
+mkdir -p .local/notes/ai
 pnpm dev "$PWD/.local/notes" "$PWD/.local/state"
 # Or: pnpm build && pnpm start "$PWD/.local/notes" "$PWD/.local/state"
 ```
@@ -59,7 +63,10 @@ Tools: `brain_status`, `note_list`, `note_read`, `note_create`, `note_edit`, `br
 
 ### Reversible defaults and limits
 
-- One explicitly configured root; UTF-8, non-hidden `.md` files, max 1 MiB each. Existing parent directories only. Symlinks and multi-link files cannot be read; directory symlinks are not traversed. No delete, move, or directory-management tools.
+- One explicitly configured root; UTF-8, non-hidden `.md` files, max 1 MiB each. Symlinks and multi-link files cannot be read; directory symlinks are not traversed. No delete, move, or directory-management tools.
+- **Creation only:** every MCP client (HTTP and stdio) can create new notes strictly inside lowercase root-relative `ai/`, including existing subdirectories. The parent directory must already exist; neither `ai/` nor subdirectories are created by note tools. `ai-other/`, `AI/`, absolute/traversal paths and symlink parents are rejected. Reading/searching and editing existing supported notes elsewhere remain allowed. This is enforced in the shared application creation path, not a client prompt or token scope.
+- Note tools cannot upload images/video, create arbitrary file types, create directories, or install `node_modules`/code packages. They only publish `.md` notes, but Markdown content is unrestricted (including code, scripts or embedded data); existing directories named `node_modules` are not specially banned, and supported Markdown there remains accessible under the same rules. This is not content filtering or a sandbox for external shell/filesystem access. Internally the server does create temporary publication files and a root writer-lock directory, and maintains snapshot directories/database files in separate private state.
+- **Shared Obsidian/Syncthing vault:** keep the whole vault mounted as the notes root and private state separate. No new environment, auth or Compose setting is needed for this policy. An administrator must ensure a real writable `ai/` directory (and any desired subdirectories) exists in the vault before creation can work; the server does not provision it. Syncthing/external editors do not participate in the write queue/locks; the concurrent external-write limits below still apply.
 - Markdown is authoritative. State must be outside the notes root (and not its ancestor), private to this process/user, and trusted. The state directory contains copies of note text as well as QMD's disposable database: treat both as sensitive, not backups.
 - QMD SDK `2.8.3`, using `searchLex`/BM25 only. No bespoke search, vector database, automatic model downloads at runtime, or task orchestration. Dependency installation includes native packages and may fetch/build native runtimes.
 - Refresh copies validated files into a disposable snapshot and calls QMD `update`. Runs synchronously after each successful write and before each search; no watcher or background queue. Refresh streams one file at a time rather than retaining the whole collection in memory. This full scan is intentionally a small-fixture default, not a vault-scale performance promise.
@@ -100,7 +107,7 @@ Regression tests reproduce million-character headings through real authenticated
 
 ## Adding authentication tokens
 
-HTTP clients each need a token. **The client stores the original token; the application config stores only its SHA-256 hash.** All registered tokens currently allow full note read/write access.
+HTTP clients each need a token. **The client stores the original token; the application config stores only its SHA-256 hash.** All registered tokens share the same note policy: read/search and edit existing notes throughout the allowed root; create only inside lowercase root-relative `ai/`.
 
 1. **Generate a token locally** and save it in that MCP client's private secret configuration:
 

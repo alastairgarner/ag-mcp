@@ -31,7 +31,9 @@ safe authoritative file access and SDK-backed search through the official
 TypeScript MCP SDK, with stdio and opt-in stateless Streamable HTTP transports.
 The local Docker configuration publishes its HTTP port on loopback only.
 V2 now requires manually configured bearer tokens for HTTP MCP requests;
-registered clients have full allowed-root read/write access. See
+registered clients can read/search and edit existing supported notes throughout
+the allowed root; new notes are restricted to lowercase root-relative `ai/`
+with existing parent directories, for both HTTP and stdio. See
 [authentication setup](authentication.md). Stdio remains local-process access.
 
 ## ARM64 and resources

@@ -132,6 +132,7 @@ export class Brain {
   }
   create(name: string, content: string) {
     return this.run(async () => {
+      if (!name.startsWith('ai/')) throw new Error('New notes must be created inside root-relative lowercase ai/');
       await this.checkWriteCapacity(name, content);
       const result = await this.notes.publish(name, content, true);
       this.freshness = { ...this.freshness, state: 'stale', reason: 'File changed' };
