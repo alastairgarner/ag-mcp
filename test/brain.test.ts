@@ -15,6 +15,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'node:url';
+import { png } from './image-fixtures.js';
 
 async function fixture(t: TestContext, limits: Partial<ResourceLimits> = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'brain-test-'));
@@ -56,7 +57,7 @@ test('real QMD and MCP vertical slice: create/search/read/edit and external chan
     return schema.parse(result.structuredContent);
   };
   assert.equal(client.getServerVersion()?.name, 'vault');
-  assert.equal((await client.listTools()).tools.length, 7);
+  assert.equal((await client.listTools()).tools.length, 8);
   assert.equal((await call('brain_status', {}, statusSchema)).freshness.state, 'stale');
   const created = await call('note_create', { path: 'ai/idea.md', content: '# Brain\n\nZeppelin knowledge garden.\n' }, mutationSchema);
   assert.equal(created.committed, true);
@@ -203,13 +204,19 @@ test('compiled TypeScript MCP entrypoint works over stdio and releases locks on 
   });
   t.after(async () => { await client.close(); await fs.rm(base, { recursive: true, force: true }); });
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 7);
+  assert.equal((await client.listTools()).tools.length, 8);
   const result = await client.callTool({ name: 'note_create', arguments: { path: 'ai/hello.md', content: '# Hello\nfixture' } });
   assert.ok(!result.isError);
   assert.equal(await fs.readFile(path.join(root, 'ai/hello.md'), 'utf8'), '# Hello\nfixture');
   const rejected = await client.callTool({ name: 'note_create', arguments: { path: 'outside.md', content: 'forbidden' } });
   assert.equal(rejected.isError, true);
   await assert.rejects(fs.stat(path.join(root, 'outside.md')), /ENOENT/);
+  await fs.mkdir(path.join(root, 'ai', 'attachments'));
+  const image = await client.callTool({ name: 'attachment_create', arguments: { path: 'ai/attachments/stdio.png', base64: png } });
+  assert.ok(!image.isError, JSON.stringify(image));
+  assert.deepEqual(await fs.readFile(path.join(root, 'ai', 'attachments', 'stdio.png')), Buffer.from(png, 'base64'));
+  const outsideImage = await client.callTool({ name: 'attachment_create', arguments: { path: 'outside.png', base64: png } });
+  assert.equal(outsideImage.isError, true);
   await client.close();
   await assert.rejects(fs.stat(path.join(root, '.brain-writer.lock')), /ENOENT/);
   await assert.rejects(fs.stat(path.join(state, 'writer.lock')), /ENOENT/);

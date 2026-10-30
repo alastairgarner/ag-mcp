@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Brain } from './brain.js';
 import { errorMessage } from './errors.js';
 import { MAX_SEARCH_RESPONSE_BYTES } from './limits.js';
+import { MAX_IMAGE_BASE64_LENGTH } from './images.js';
 
 async function respond<T extends Record<string, unknown>>(action: () => T | Promise<T>, maxResponseBytes?: number): Promise<CallToolResult> {
   try {
@@ -44,6 +45,11 @@ export function createServer(brain: Brain): McpServer {
     description: 'Atomically create a Markdown note strictly inside root-relative lowercase ai/ (including existing subdirectories); parent directory must already exist; never overwrite.',
     inputSchema: { path: name, content: text },
   }, a => respond(() => brain.create(a.path, a.content)));
+
+  server.registerTool('attachment_create', {
+    description: 'Create an image strictly inside root-relative lowercase ai/attachments/; parent directory must already exist; never overwrite. Pass canonical padded base64 (no data URL), max 1 MiB decoded. PNG, JPEG, GIF or WebP only, checked by signature and matching lowercase extension; no SVG. Returns the vault-relative path; use note_edit separately to embed it. Images are not indexed.',
+    inputSchema: { path: name, base64: z.string().min(1).max(MAX_IMAGE_BASE64_LENGTH) },
+  }, a => respond(() => brain.createAttachment(a.path, a.base64)));
 
   server.registerTool('note_edit', {
     description: 'Edit an existing Markdown note anywhere in the allowed root, not just ai/. Exact unique, non-overlapping replacements against original content, guarded by full-file SHA-256. No blind overwrite.',

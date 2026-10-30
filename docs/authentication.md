@@ -8,8 +8,11 @@ MCP processing. There is no unauthenticated HTTP mode or old-flag fallback.
 Each registered token has a unique client name and the same allowed-root policy:
 read/search and edit existing supported Markdown anywhere; create new notes only
 inside lowercase root-relative `ai/`, including existing subdirectories. Parent
-directories must already exist. This creation-only boundary also applies to stdio;
-it needs no auth/config change. Authenticated MCP request logs include that name, not the token. This is
+directories must already exist. All clients can also use `attachment_create` to
+upload PNG/JPEG/GIF/WebP images only under lowercase root-relative
+`ai/attachments/`, with existing parents, max 1 MiB, matching signature/extension
+and no overwriting. See [image limits](../README.md#image-attachments). These
+creation-only boundaries also apply to stdio; no auth/config change is needed. Authenticated MCP request logs include that name, not the token. This is
 basic request attribution, not a complete per-tool audit trail. No users,
 database, OAuth/login UI, expiry, scopes, or admin HTTP endpoints are introduced.
 

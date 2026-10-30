@@ -7,6 +7,7 @@ import { limitsSchema, MAX_SEARCH_TITLE_LENGTH, MAX_SEARCH_EXCERPT_LENGTH, MAX_S
 import type { ResourceLimits } from './limits.js';
 import type { ExactEdit } from './files.js';
 import { errorMessage } from './errors.js';
+import { decodeImage } from './images.js';
 
 export type Freshness = { externalChanges: 'not-monitored' } & (
   | { state: 'pending' }
@@ -84,10 +85,9 @@ export class Brain {
   status(): BrainStatus {
     return { root: this.notes.root, searchMode: 'qmd-bm25', freshness: { ...this.freshness }, limits: { ...this.limits }, pendingOperations: this.pendingOperations };
   }
-  private async checkWriteCapacity(name: string, content: string) {
-    const newBytes = Buffer.byteLength(content);
+  private async checkWriteCapacity(name: string, newBytes: number) {
     if (newBytes > MAX_BYTES) throw new Error('File too large');
-    const names = await this.notes.list();
+    const names = await this.notes.list(true);
     if (!names.includes(name) && names.length >= this.limits.maxCollectionFiles) throw new Error('Collection file limit exceeded');
     let bytes = newBytes;
     for (const existing of names) {
@@ -133,11 +133,19 @@ export class Brain {
   create(name: string, content: string) {
     return this.run(async () => {
       if (!name.startsWith('ai/')) throw new Error('New notes must be created inside root-relative lowercase ai/');
-      await this.checkWriteCapacity(name, content);
+      await this.checkWriteCapacity(name, Buffer.byteLength(content));
       const result = await this.notes.publish(name, content, true);
       this.freshness = { ...this.freshness, state: 'stale', reason: 'File changed' };
       await this.refreshInternal();
       return { ...result, committed: true, freshness: this.status().freshness };
+    });
+  }
+  createAttachment(name: string, base64: string) {
+    return this.run(async () => {
+      const { bytes, mimeType } = decodeImage(name, base64);
+      await this.checkWriteCapacity(name, bytes.length);
+      const result = await this.notes.createImage(name, bytes);
+      return { ...result, committed: true, bytes: bytes.length, mimeType };
     });
   }
   edit(name: string, expectedHash: string, edits: readonly ExactEdit[]) {
@@ -145,7 +153,7 @@ export class Brain {
       const file = await this.notes.read(name); // Hash checked INSIDE write serialization.
       if (file.hash !== expectedHash) throw new Error('Content hash conflict; read again');
       const content = replaceExact(file.content, edits);
-      await this.checkWriteCapacity(name, content);
+      await this.checkWriteCapacity(name, Buffer.byteLength(content));
       const result = await this.notes.publish(name, content, false);
       this.freshness = { ...this.freshness, state: 'stale', reason: 'File changed' };
       await this.refreshInternal();

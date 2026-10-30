@@ -55,21 +55,50 @@ The entrypoint speaks MCP over **stdio**, not an interactive shell. For an MCP c
 - `src/http-main.ts` / `src/http.ts`: authenticated Streamable HTTP entrypoint and transport lifecycle.
 - `src/auth.ts` / `src/token-hash.ts`: manual hash-only credential config, bearer validation, and stdin-only hashing helper.
 - `src/brain.ts`: thin QMD SDK integration and serialized operations.
-- `src/files.ts`: contained Markdown access and atomic publication.
+- `src/files.ts`: contained Markdown access and atomic publication; `src/images.ts`: bounded base64/image-signature validation.
 - `src/errors.ts`: unknown-error handling; `test/brain.test.ts`: fixture-only integration/safety tests, including a compiled stdio client/server round trip.
 - `dist/`: generated JavaScript; never edit or commit it. Source imports intentionally use `.js` for Node ESM after compilation.
 
-Tools: `brain_status`, `note_list`, `note_read`, `note_create`, `note_edit`, `brain_refresh`, `note_search`.
+Tools: `brain_status`, `note_list`, `note_read`, `note_create`, `note_edit`, `attachment_create`, `brain_refresh`, `note_search`.
+
+### Image attachments
+
+`attachment_create` is separate from Markdown editing, available over HTTP and stdio
+with the same client permissions. Pass `{ path, base64 }`, for example
+`{ "path": "ai/attachments/photo.png", "base64": "<canonical padded base64>" }`.
+No data URL, whitespace, remote URL fetching or local source-file path is accepted.
+
+- PNG (`.png`), JPEG (`.jpg`/`.jpeg`), GIF (`.gif`) and WebP (`.webp`) only.
+  Lowercase extension must match the binary signature; SVG, video and arbitrary
+  extensions are rejected. Maximum decoded size is **1 MiB** (base64 input at most
+  **1,398,104 characters**), within the existing HTTP request-body limit.
+- Creation is strictly inside lowercase root-relative `ai/attachments/`, including
+  existing subdirectories. An administrator must create that real writable directory
+  beforehand; the tool cannot create directories. Traversal, hidden components,
+  symlink parents and absolute paths are rejected. Publication uses the same
+  descriptor-anchored, synced, atomic no-clobber path as note creation, mode `0600`.
+  Existing files, symlinks and hardlinks are never replaced.
+- Returns `path`, SHA-256 `hash`, `bytes`, `mimeType` and `committed: true`.
+  Use `note_edit` separately to insert `![[ai/attachments/photo.png]]` into a note.
+  Uploading does not modify any note or refresh the index: images are not listed,
+  read, edited or indexed by the Markdown tools. There is no attachment overwrite,
+  delete or binary retrieval tool. On an ambiguous I/O failure, publication may
+  already have committed; retrying the same path cannot clobber it, but verification
+  of an existing image requires external filesystem access.
+- Validation identifies format signatures, **not** full image decodability, pixel
+  dimensions, safe metadata or absence of malware. Files are not decoded, resized,
+  stripped or re-encoded; embedded payloads/metadata can remain. External shell
+  access and Obsidian rendering are outside MCP enforcement. No dependency added.
 
 ### Reversible defaults and limits
 
 - One explicitly configured root; UTF-8, non-hidden `.md` files, max 1 MiB each. Symlinks and multi-link files cannot be read; directory symlinks are not traversed. No delete, move, or directory-management tools.
 - **Creation only:** every MCP client (HTTP and stdio) can create new notes strictly inside lowercase root-relative `ai/`, including existing subdirectories. The parent directory must already exist; neither `ai/` nor subdirectories are created by note tools. `ai-other/`, `AI/`, absolute/traversal paths and symlink parents are rejected. Reading/searching and editing existing supported notes elsewhere remain allowed. This is enforced in the shared application creation path, not a client prompt or token scope.
-- Note tools cannot upload images/video, create arbitrary file types, create directories, or install `node_modules`/code packages. They only publish `.md` notes, but Markdown content is unrestricted (including code, scripts or embedded data); existing directories named `node_modules` are not specially banned, and supported Markdown there remains accessible under the same rules. This is not content filtering or a sandbox for external shell/filesystem access. Internally the server does create temporary publication files and a root writer-lock directory, and maintains snapshot directories/database files in separate private state.
-- **Shared Obsidian/Syncthing vault:** keep the whole vault mounted as the notes root and private state separate. No new environment, auth or Compose setting is needed for this policy. An administrator must ensure a real writable `ai/` directory (and any desired subdirectories) exists in the vault before creation can work; the server does not provision it. Syncthing/external editors do not participate in the write queue/locks; the concurrent external-write limits below still apply.
+- Note tools only publish `.md` notes; the separate `attachment_create` tool publishes the limited image formats described above. No tool uploads video, creates arbitrary file extensions or directories, or installs `node_modules`/code packages. Markdown content is unrestricted (including code, scripts or embedded data); existing directories named `node_modules` are not specially banned, and supported Markdown there remains accessible under the same rules. This is not content filtering or a sandbox for external shell/filesystem access. Internally the server does create temporary publication files and a root writer-lock directory, and maintains snapshot directories/database files in separate private state.
+- **Shared Obsidian/Syncthing vault:** keep the whole vault mounted as the notes root and private state separate. No new environment, auth or Compose setting is needed for this policy. An administrator must ensure a real writable `ai/` directory (and `ai/attachments/` for image uploads, plus any desired subdirectories) exists in the vault before creation can work; the server does not provision it. Syncthing/external editors do not participate in the write queue/locks; the concurrent external-write limits below still apply.
 - Markdown is authoritative. State must be outside the notes root (and not its ancestor), private to this process/user, and trusted. The state directory contains copies of note text as well as QMD's disposable database: treat both as sensitive, not backups.
 - QMD SDK `2.8.3`, using `searchLex`/BM25 only. No bespoke search, vector database, automatic model downloads at runtime, or task orchestration. Dependency installation includes native packages and may fetch/build native runtimes.
-- Refresh copies validated files into a disposable snapshot and calls QMD `update`. Runs synchronously after each successful write and before each search; no watcher or background queue. Refresh streams one file at a time rather than retaining the whole collection in memory. This full scan is intentionally a small-fixture default, not a vault-scale performance promise.
+- Refresh copies validated files into a disposable snapshot and calls QMD `update`. Runs synchronously after each successful Markdown write and before each search; no watcher or background queue. Refresh streams one file at a time rather than retaining the whole collection in memory. This full scan is intentionally a small-fixture default, not a vault-scale performance promise.
 - Freshness is `pending`, `snapshot`, or `stale`. `snapshot` means a successful scan, **not** a transactionally consistent filesystem snapshot or proof against later external changes. External changes are not continuously monitored. Refresh failure leaves explicit stale status; a committed write stays committed, and cached search results may remain stale/partial.
 - All operations use one serial queue, stronger than per-file serialization. Edits check the full-file SHA-256 inside that queue. Each old text must occur once in the original file; replacements cannot overlap. Creates publish with an atomic no-clobber link; edits use same-directory rename after syncing the temporary file. New/replaced files have mode `0600`.
 - Exclusive root/state lock directories prevent multiple prototype instances from writing the same root. After a crash, manually remove `.brain-writer.lock` in the root and `writer.lock` in state **only after confirming no server is running**. Keep the root exclusive to this writer during edits: unrelated editors do not participate in the queue/locks, so concurrent external writes are not a cross-process compare-and-swap guarantee. No protection is claimed against privileged filesystem mutation/mount changes. I/O failure after publication can have an ambiguous acknowledgement; re-read before retrying.
@@ -83,17 +112,17 @@ Security-review fixes bound compact search output and admitted work. Defaults ar
 - Search titles are at most **256 UTF-16 code units**, excerpts **400**. `titleTruncated` identifies shortened titles; references are never shortened. Search data has a **32 KiB UTF-8 JSON budget**, with `resultsTruncated: true` when whole trailing hits are omitted. The MCP tool result, including both text and structured copies, has a **128 KiB safety ceiling** (JSON-RPC's request ID/envelope is separate). These are display limits only: authoritative Markdown is unchanged.
 - One operation executes at a time. The pending-operation limit includes **running + waiting** work, for HTTP **and stdio**. Overflow is refused before admission with an MCP tool error (`Server busy…`); rejected writes are never queued to run later. HTTP additionally limits simultaneous requests, returning **503 + Retry-After: 1** without queuing overflow. Retry busy requests with backoff; for an ambiguous write failure/disconnect, re-read the file before retrying.
 - HTTP slots include request-body reading and response backpressure. TCP connections and requests per socket are also bounded. `/health` bypasses the expensive-work admission gate (but still shares the TCP connection cap and Host/Origin checks). Body/socket inactivity limits are 30 seconds, header timeout 10 seconds; each socket handles at most 100 requests.
-- Collection capacity is checked **inside the serialized operation before creating/replacing Markdown**. Budget failures leave the file untouched. External files exceeding scan/count/byte budgets make refresh explicitly `stale`; repair the files externally or raise the relevant limit and restart. Reads of known supported files remain possible. Limits do not delete notes or silently skip over-budget collections.
+- Collection capacity is checked **inside the serialized operation before creating/replacing Markdown or creating images**. The shared write budget counts non-hidden Markdown throughout the root plus supported image extensions under `ai/attachments/`; unrelated existing vault images are not included. Images also count toward filesystem scan-entry limits. Budget failures leave files untouched. Refresh still indexes/checks Markdown only; external images exceeding upload budgets block subsequent writes, not Markdown search. External Markdown exceeding scan/count/byte budgets makes refresh explicitly `stale`; repair externally or raise the relevant limit and restart. Reads of known supported notes remain possible. Limits do not delete files.
 
-Both entrypoints accept these validated positive-integer environment overrides (bytes are UTF-8 source bytes, not character counts):
+Both entrypoints accept these validated positive-integer environment overrides (Markdown bytes are UTF-8 source bytes; image bytes are decoded binary bytes):
 
 | Variable | Default | Scope |
 | --- | --- | --- |
 | `MAX_PENDING_OPERATIONS` | `8` | Running + waiting Brain operations |
 | `MAX_HTTP_REQUESTS` | `8` | Simultaneous admitted HTTP MCP requests |
 | `MAX_HTTP_CONNECTIONS` | `32` | TCP sockets, including idle/slow clients |
-| `MAX_COLLECTION_FILES` | `10000` | Non-hidden Markdown files |
-| `MAX_COLLECTION_BYTES` | `67108864` | Total Markdown source bytes (64 MiB) |
+| `MAX_COLLECTION_FILES` | `10000` | Markdown files + supported images under `ai/attachments/` (pre-write) |
+| `MAX_COLLECTION_BYTES` | `67108864` | Markdown source + those image bytes (64 MiB, pre-write) |
 | `MAX_SCAN_ENTRIES` | `20000` | Files/directories encountered, including skipped/hidden entries |
 | `MAX_SCAN_DEPTH` | `32` | Directory nesting below the root |
 

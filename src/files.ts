@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { BinaryLike } from 'node:crypto';
 import { hasErrorCode } from './errors.js';
+import { imagePath } from './images.js';
 import { limitsSchema, MAX_NOTE_PATH_BYTES } from './limits.js';
 import type { ResourceLimits } from './limits.js';
 
@@ -24,15 +25,16 @@ export class Notes {
     return new Notes(absolute, await fs.open(absolute, directoryFlags), limits);
   }
   private constructor(readonly root: string, private readonly handle: FileHandle, private readonly limits: ResourceLimits) {}
-  private parts(name: string) {
+  private parts(name: string, image: boolean) {
     if (typeof name !== 'string' || name.includes('\\') || name.includes('\0') || path.isAbsolute(name)) throw new Error('Invalid path');
     if (Buffer.byteLength(name) > MAX_NOTE_PATH_BYTES) throw new Error('Note path exceeds 1024 bytes');
     const parts = name.split('/');
-    if (parts.some(p => !p || p === '.' || p === '..' || p.startsWith('.')) || !name.endsWith('.md')) throw new Error('Use a relative, non-hidden .md path');
+    if (parts.some(p => !p || p === '.' || p === '..' || p.startsWith('.'))) throw new Error('Use a relative, non-hidden path');
+    if (image ? !imagePath.test(name) : !name.endsWith('.md')) throw new Error(image ? 'Use a supported lowercase image extension' : 'Use a .md path');
     return parts;
   }
-  private async parent<T>(name: string, action: (target: string, parent: string) => Promise<T>): Promise<T> {
-    const parts = this.parts(name);
+  private async parent<T>(name: string, action: (target: string, parent: string) => Promise<T>, image = false): Promise<T> {
+    const parts = this.parts(name, image);
     const handles: FileHandle[] = [];
     let parent = this.handle;
     try {
@@ -61,12 +63,12 @@ export class Notes {
       const handle = await fs.open(target, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
       try {
         const stat = await handle.stat();
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_BYTES) throw new Error('Not a supported single-link Markdown file (max 1 MiB)');
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_BYTES) throw new Error('Not a supported single-link file (max 1 MiB)');
         return stat.size;
       } finally { await handle.close(); }
-    });
+    }, imagePath.test(name));
   }
-  async list() {
+  async list(includeImages = false) {
     const notes: string[] = [];
     let scanned = 0;
     const walk = async (handle: FileHandle, prefix: string, depth: number): Promise<void> => {
@@ -81,7 +83,7 @@ export class Notes {
           if (depth >= this.limits.maxScanDepth) throw new Error('Collection scan depth limit exceeded');
           const child = await fs.open(`${fdPath(handle)}/${entry.name}`, directoryFlags);
           try { await walk(child, name + '/', depth + 1); } finally { await child.close(); }
-        } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        } else if (entry.isFile() && (entry.name.endsWith('.md') || (includeImages && name.startsWith('ai/attachments/') && imagePath.test(entry.name)))) {
           if (notes.length >= this.limits.maxCollectionFiles) throw new Error('Collection file limit exceeded');
           notes.push(name);
         }
@@ -91,12 +93,18 @@ export class Notes {
     return notes.sort();
   }
   async publish(name: string, content: string, create: boolean) {
-    if (Buffer.byteLength(content) > MAX_BYTES) throw new Error('File too large');
+    return this.publishBytes(name, Buffer.from(content, 'utf8'), create, false);
+  }
+  async createImage(name: string, bytes: Buffer) {
+    return this.publishBytes(name, bytes, true, true);
+  }
+  private async publishBytes(name: string, content: Buffer, create: boolean, image: boolean) {
+    if (content.length > MAX_BYTES) throw new Error('File too large');
     return this.parent(name, async (target, parent) => {
       const temporary = `${parent}/.brain-${randomUUID()}.tmp`;
       const handle = await fs.open(temporary, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
       try {
-        try { await handle.writeFile(content, 'utf8'); await handle.sync(); }
+        try { await handle.writeFile(content); await handle.sync(); }
         finally { await handle.close(); }
         if (create) await fs.link(temporary, target); // Atomic no-clobber publication.
         else await fs.rename(temporary, target);
@@ -104,7 +112,7 @@ export class Notes {
         try { await dir.sync(); } finally { await dir.close(); }
       } finally { await fs.unlink(temporary).catch(error => { if (!hasErrorCode(error, 'ENOENT')) throw error; }); }
       return { path: name, hash: hash(content) };
-    });
+    }, image);
   }
   async acquireWriter() { await fs.mkdir(`${fdPath(this.handle)}/.brain-writer.lock`, { mode: 0o700 }); }
   async releaseWriter() { await fs.rmdir(`${fdPath(this.handle)}/.brain-writer.lock`); }

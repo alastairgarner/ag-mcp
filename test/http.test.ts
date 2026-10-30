@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { Brain } from '../src/brain.js';
 import { startHttp, MAX_REQUEST_BYTES } from '../src/http.js';
 import { TokenAuth, hashToken } from '../src/auth.js';
+import { png } from './image-fixtures.js';
 
 async function fixture(t: TestContext, limits: Partial<ResourceLimits> = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'brain-http-'));
@@ -56,7 +57,7 @@ const textResult = z.array(z.object({ type: z.literal('text'), text: z.string() 
 test('stateless HTTP shares safe QMD-backed storage across independent clients', async t => {
   const { connect, secondToken, root } = await fixture(t);
   const [a, b] = await Promise.all([connect(), connect(secondToken)]);
-  assert.equal((await a.listTools()).tools.length, 7);
+  assert.equal((await a.listTools()).tools.length, 8);
   const created = await a.callTool({ name: 'note_create', arguments: { path: 'ai/http.md', content: '# HTTP\nNeptune exploration' } });
   assert.ok(!created.isError);
   const { hash } = mutationSchema.parse(created.structuredContent);
@@ -88,6 +89,27 @@ test('stateless HTTP shares safe QMD-backed storage across independent clients',
   } });
   assert.ok(!edited.isError);
   assert.equal(await fs.readFile(path.join(root, 'existing.md'), 'utf8'), 'still editable');
+});
+
+test('HTTP image uploads validate bytes and boundaries before atomic publication', async t => {
+  const { connect, secondToken, root } = await fixture(t);
+  await fs.mkdir(path.join(root, 'ai', 'attachments'));
+  const [a, b] = await Promise.all([connect(), connect(secondToken)]);
+  const result = await a.callTool({ name: 'attachment_create', arguments: { path: 'ai/attachments/http.png', base64: png } });
+  assert.ok(!result.isError, JSON.stringify(result));
+  assert.equal(z.object({ path: z.literal('ai/attachments/http.png'), committed: z.literal(true), mimeType: z.literal('image/png') }).parse(result.structuredContent).committed, true);
+  assert.deepEqual(await fs.readFile(path.join(root, 'ai', 'attachments', 'http.png')), Buffer.from(png, 'base64'));
+  for (const args of [
+    { path: 'ai/attachments/http.png', base64: png },
+    { path: 'outside.png', base64: png },
+    { path: 'ai/attachments/mismatch.jpg', base64: png },
+    { path: 'ai/attachments/fake.png', base64: Buffer.from('text').toString('base64') },
+    { path: 'ai/attachments/invalid.png', base64: png + '\\n' },
+    { path: 'ai/attachments/large.png', base64: 'A'.repeat(1_398_108) },
+  ]) assert.equal((await b.callTool({ name: 'attachment_create', arguments: args })).isError, true);
+  assert.deepEqual(await fs.readdir(path.join(root, 'ai', 'attachments')), ['http.png']);
+  const listed = await b.callTool({ name: 'note_list', arguments: {} });
+  assert.deepEqual(z.object({ paths: z.array(z.string()) }).parse(listed.structuredContent).paths, []);
 });
 
 test('authenticated HTTP still enforces Host/Origin, request size, routes and methods', async t => {

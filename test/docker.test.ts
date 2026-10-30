@@ -102,7 +102,7 @@ test('Docker HTTP MCP: authenticated safe writes, token revocation, restart pers
   assert.equal(anonymous.status, 401);
   assert.equal(anonymous.headers.get('www-authenticate'), 'Bearer realm="markdown-brain"');
   const [a, b] = await Promise.all([connect(), connect(secondToken)]);
-  assert.equal((await a.listTools()).tools.length, 7);
+  assert.equal((await a.listTools()).tools.length, 8);
   const createdNote = await call(a, 'note_create', { path: 'ai/docker.md', content: '# Docker\nOrion observatory\n' }, mutation);
   assert.equal(createdNote.freshness.state, 'snapshot');
   const found = await call(b, 'note_search', { query: 'Orion' }, search);
