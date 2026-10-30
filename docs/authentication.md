@@ -5,8 +5,11 @@ notifications and tool calls. Missing/wrong/malformed/duplicate credentials get
 `401 Unauthorized` with `WWW-Authenticate: Bearer realm="markdown-brain"`, before
 MCP processing. There is no unauthenticated HTTP mode or old-flag fallback.
 
-Each registered token has a unique client name and full allowed-root read/write
-access. Authenticated MCP request logs include that name, not the token. This is
+Each registered token has a unique client name and the same allowed-root policy:
+read/search and edit existing supported Markdown anywhere; create new notes only
+inside lowercase root-relative `ai/`, including existing subdirectories. Parent
+directories must already exist. This creation-only boundary also applies to stdio;
+it needs no auth/config change. Authenticated MCP request logs include that name, not the token. This is
 basic request attribution, not a complete per-tool audit trail. No users,
 database, OAuth/login UI, expiry, scopes, or admin HTTP endpoints are introduced.
 
@@ -117,7 +120,7 @@ provider or an interactive MCP authorization/discovery flow.
 
 **Require HTTPS for remote clients**, terminated by Traefik. Plain HTTP is only
 appropriate on loopback for these local Docker tests, or the private
-proxy-to-container hop. A stolen token grants full access until revoked.
+proxy-to-container hop. A stolen token grants all of these note permissions until revoked.
 Do not publish the container's application port directly in a remote deployment.
 Do not log Authorization headers in proxy/access/debug logs. Host/Origin checks
 remain enabled, but are not authentication or a replacement for TLS.

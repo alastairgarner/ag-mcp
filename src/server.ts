@@ -17,7 +17,7 @@ async function respond<T extends Record<string, unknown>>(action: () => T | Prom
 }
 
 export function createServer(brain: Brain): McpServer {
-  const server = new McpServer({ name: 'markdown-brain', version: '0.2.0' });
+  const server = new McpServer({ name: 'vault', version: '0.2.0' });
   const name = z.string().min(1).max(1024);
   const text = z.string().max(1024 * 1024);
 
@@ -41,12 +41,12 @@ export function createServer(brain: Brain): McpServer {
   }, a => respond(() => brain.read(a.path, a.fromLine, a.maxLines)));
 
   server.registerTool('note_create', {
-    description: 'Atomically create a Markdown note; parent directory must exist; never overwrite.',
+    description: 'Atomically create a Markdown note strictly inside root-relative lowercase ai/ (including existing subdirectories); parent directory must already exist; never overwrite.',
     inputSchema: { path: name, content: text },
   }, a => respond(() => brain.create(a.path, a.content)));
 
   server.registerTool('note_edit', {
-    description: 'Exact unique, non-overlapping replacements against original content, guarded by full-file SHA-256. No blind overwrite.',
+    description: 'Edit an existing Markdown note anywhere in the allowed root, not just ai/. Exact unique, non-overlapping replacements against original content, guarded by full-file SHA-256. No blind overwrite.',
     inputSchema: {
       path: name,
       expectedHash: z.string().regex(/^[a-f0-9]{64}$/),
